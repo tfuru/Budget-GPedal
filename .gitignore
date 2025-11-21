@@ -1,0 +1,52 @@
+# Arduino IDE build files
+*.elf
+*.hex
+*.bin
+*.eep
+*.lst
+*.map
+*.sym
+*.o
+*.d
+*.gcno
+*.gcda
+*.gcov
+*.su
+*.srec
+*.lss
+*.obj
+*.lib
+*.a
+*.ar
+
+# Arduino IDE configuration files
+arduino.json
+platform.local.txt
+boards.local.txt
+programmers.local.txt
+
+# PlatformIO build files (if using PlatformIO)
+.pio/
+.vscode/
+
+# Other common ignored files
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+*~
+
+.pio
+.vscode/.browse
+.vscode/.vscode.ipch
+.vscode/*.code-workspace
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/c_cpp_properties.json
+.piolibdeps
+.pioenvs
+build
+firmware.elf
+firmware.hex
+firmware.bin
