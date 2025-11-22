@@ -21,7 +21,7 @@ WebServer server(80);
 
 // 状態管理
 String textBuffer = "Hello Budget-G";
-// 0:Text, 1:Copy, 2:Paste, 3:Lock, 4:Enter, 5:Tab, 6:Space
+// 0:Text, 1:Copy, 2:Paste, 3:Lock, 4:Enter, 5:Tab, 6:Space, 7:SingleKey
 int currentMode = 0; 
 
 // --- 設定保存・読み込み関数 ---
@@ -76,8 +76,20 @@ const char index_html[] PROGMEM = R"rawliteral(
     function updateUI() {
       var mode = document.getElementById("modeSelect").value;
       var inputField = document.getElementById("textInput");
-      if(mode == "0") { inputField.style.display = "block"; } 
-      else { inputField.style.display = "none"; }
+      var inputLabel = document.getElementById("inputLabel");
+      
+      // Text Mode(0) または Single Key(7) の場合は入力欄を表示
+      if(mode == "0") { 
+        inputField.style.display = "block";
+        inputLabel.innerText = "Text to Type:";
+      } 
+      else if (mode == "7") {
+        inputField.style.display = "block";
+        inputLabel.innerText = "Single Key (Char):";
+      }
+      else { 
+        inputField.style.display = "none"; 
+      }
     }
   </script>
 </head>
@@ -87,18 +99,21 @@ const char index_html[] PROGMEM = R"rawliteral(
     <form action="/set" method="GET">
       <label>Pedal Action:</label>
       <select id="modeSelect" name="mode" onchange="updateUI()">
-        <option value="0" %SELECTED_0%>Text Input</option>
+        <option value="0" %SELECTED_0%>Text Input (String)</option>
         <option value="1" %SELECTED_1%>Ctrl + C (Copy)</option>
         <option value="2" %SELECTED_2%>Ctrl + V (Paste)</option>
         <option value="3" %SELECTED_3%>Win + L (Lock PC)</option>
         <option value="4" %SELECTED_4%>Enter Key</option>
         <option value="5" %SELECTED_5%>Tab Key</option>
         <option value="6" %SELECTED_6%>Space Key</option>
+        <option value="7" %SELECTED_7%>Single Key (Press)</option>
       </select>
+      
       <div id="textInput">
-        <label>Text Content:</label>
-        <input type="text" name="msg" value="%CURRENT_TEXT%" placeholder="Enter text...">
+        <label id="inputLabel">Text Content:</label>
+        <input type="text" name="msg" value="%CURRENT_TEXT%" placeholder="Enter text or char...">
       </div>
+      
       <input type="submit" value="Update & Save">
     </form>
     <div class="status">
@@ -120,6 +135,7 @@ String getStatusString() {
     case 4: return "Action: Enter";
     case 5: return "Action: Tab";
     case 6: return "Action: Space";
+    case 7: return "Key Press: '" + textBuffer.substring(0, 1) + "'";
     default: return "Unknown";
   }
 }
@@ -128,8 +144,7 @@ void handleRoot() {
   String html = index_html;
   html.replace("%CURRENT_TEXT%", textBuffer);
   html.replace("%CURRENT_STATUS%", getStatusString());
-  // 選択肢が増えたのでループ回数を変更 (0〜6)
-  for(int i=0; i<=6; i++){
+  for(int i=0; i<=7; i++){ // ループ回数を7まで拡張
     String key = "%SELECTED_" + String(i) + "%";
     if(i == currentMode) html.replace(key, "selected");
     else html.replace(key, "");
@@ -147,7 +162,7 @@ void handleSet() {
   if (server.hasArg("mode")) currentMode = server.arg("mode").toInt();
   if (server.hasArg("msg")) textBuffer = server.arg("msg");
   
-  saveSettings(); // 設定変更時に保存
+  saveSettings();
 
   server.sendHeader("Location", String("http://") + apIP.toString());
   server.send(303);
@@ -163,7 +178,7 @@ void setup() {
   M5.Display.setBrightness(128);
   M5.Display.fillScreen(TFT_RED);
 
-  loadSettings(); // 起動時に設定読み込み
+  loadSettings();
 
   Keyboard.begin();
   USB.begin();
@@ -208,11 +223,22 @@ void loop() {
       case 4: // Enter
         Keyboard.write(KEY_RETURN); 
         break;
-      case 5: // Tab (新規追加)
+      case 5: // Tab
         Keyboard.write(KEY_TAB); 
         break;
-      case 6: // Space (新規追加)
+      case 6: // Space
         Keyboard.write(' '); 
+        break;
+      case 7: // Single Key Press (新規追加)
+        if (textBuffer.length() > 0) {
+          // 入力された文字列の1文字目を取得
+          char keyToPress = textBuffer.charAt(0);
+          
+          // Press -> Delay -> Release のパターンで確実に送信
+          Keyboard.press(keyToPress);
+          delay(50); // ゲーム等で認識させるために少し待つ
+          Keyboard.releaseAll();
+        }
         break;
     }
     delay(100);
