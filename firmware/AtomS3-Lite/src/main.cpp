@@ -2,26 +2,61 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include <DNSServer.h>  // 追加: DNSサーバー用
+#include <DNSServer.h>
 #include "USB.h"
 #include "USBHIDKeyboard.h"
+#include <LittleFS.h>
 
-// --- 設定エリア ---
+// --- Wi-Fi設定 ---
 const char *ssid = "Budget-G_Pedal";
 const char *password = "12345678";
+const char *CONFIG_FILE = "/config.txt";
 // ----------------
 
-const byte DNS_PORT = 53; // DNSポート番号
-IPAddress apIP(192, 168, 4, 1); // 固定IP設定
-DNSServer dnsServer; // DNSサーバーインスタンス
+const byte DNS_PORT = 53;
+IPAddress apIP(192, 168, 4, 1);
+DNSServer dnsServer;
 USBHIDKeyboard Keyboard;
 WebServer server(80);
 
 // 状態管理
 String textBuffer = "Hello Budget-G";
+// 0:Text, 1:Copy, 2:Paste, 3:Lock, 4:Enter, 5:Tab, 6:Space
 int currentMode = 0; 
 
-// HTMLページ (変更なし)
+// --- 設定保存・読み込み関数 ---
+void saveSettings() {
+  File file = LittleFS.open(CONFIG_FILE, FILE_WRITE);
+  if (!file) {
+    Serial.println("Failed to open file for writing");
+    return;
+  }
+  file.println(currentMode);
+  file.print(textBuffer);
+  file.close();
+  Serial.println("Saved: Mode=" + String(currentMode));
+}
+
+void loadSettings() {
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS Mount Failed");
+    return;
+  }
+  if (LittleFS.exists(CONFIG_FILE)) {
+    File file = LittleFS.open(CONFIG_FILE, FILE_READ);
+    if (file) {
+      String modeStr = file.readStringUntil('\n');
+      currentMode = modeStr.toInt();
+      if (file.available()) {
+        textBuffer = file.readString();
+      }
+      file.close();
+      Serial.println("Loaded: Mode=" + String(currentMode));
+    }
+  }
+}
+
+// --- Web UI ---
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
@@ -41,11 +76,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     function updateUI() {
       var mode = document.getElementById("modeSelect").value;
       var inputField = document.getElementById("textInput");
-      if(mode == "0") {
-        inputField.style.display = "block";
-      } else {
-        inputField.style.display = "none";
-      }
+      if(mode == "0") { inputField.style.display = "block"; } 
+      else { inputField.style.display = "none"; }
     }
   </script>
 </head>
@@ -60,12 +92,14 @@ const char index_html[] PROGMEM = R"rawliteral(
         <option value="2" %SELECTED_2%>Ctrl + V (Paste)</option>
         <option value="3" %SELECTED_3%>Win + L (Lock PC)</option>
         <option value="4" %SELECTED_4%>Enter Key</option>
+        <option value="5" %SELECTED_5%>Tab Key</option>
+        <option value="6" %SELECTED_6%>Space Key</option>
       </select>
       <div id="textInput">
         <label>Text Content:</label>
         <input type="text" name="msg" value="%CURRENT_TEXT%" placeholder="Enter text...">
       </div>
-      <input type="submit" value="Update Pedal">
+      <input type="submit" value="Update & Save">
     </form>
     <div class="status">
       <strong>Current Setting:</strong><br>
@@ -84,6 +118,8 @@ String getStatusString() {
     case 2: return "Action: Ctrl + V";
     case 3: return "Action: Win + L";
     case 4: return "Action: Enter";
+    case 5: return "Action: Tab";
+    case 6: return "Action: Space";
     default: return "Unknown";
   }
 }
@@ -92,7 +128,8 @@ void handleRoot() {
   String html = index_html;
   html.replace("%CURRENT_TEXT%", textBuffer);
   html.replace("%CURRENT_STATUS%", getStatusString());
-  for(int i=0; i<=4; i++){
+  // 選択肢が増えたのでループ回数を変更 (0〜6)
+  for(int i=0; i<=6; i++){
     String key = "%SELECTED_" + String(i) + "%";
     if(i == currentMode) html.replace(key, "selected");
     else html.replace(key, "");
@@ -100,7 +137,6 @@ void handleRoot() {
   server.send(200, "text/html", html);
 }
 
-// キャプティブポータル用: 未知のURLへのアクセスをルートに転送
 void handleNotFound() {
   String message = "Redirecting to Budget-G Pedal...";
   server.sendHeader("Location", String("http://") + apIP.toString(), true); 
@@ -111,9 +147,8 @@ void handleSet() {
   if (server.hasArg("mode")) currentMode = server.arg("mode").toInt();
   if (server.hasArg("msg")) textBuffer = server.arg("msg");
   
-  Serial.println("Updated - Mode: " + String(currentMode) + ", Text: " + textBuffer);
+  saveSettings(); // 設定変更時に保存
 
-  // 設定後はルートに戻る
   server.sendHeader("Location", String("http://") + apIP.toString());
   server.send(303);
   
@@ -128,29 +163,23 @@ void setup() {
   M5.Display.setBrightness(128);
   M5.Display.fillScreen(TFT_RED);
 
+  loadSettings(); // 起動時に設定読み込み
+
   Keyboard.begin();
   USB.begin();
 
-  // Wi-Fi AP設定 (IPを明示的に指定)
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
   WiFi.softAP(ssid, password);
 
-  // DNSサーバー開始 (すべてのドメイン "*" を自分自身 apIP に解決させる)
   dnsServer.start(DNS_PORT, "*", apIP);
   
-  Serial.begin(115200);
-  Serial.print("Budget-G Pedal IP: ");
-  Serial.println(apIP);
-
   server.on("/", handleRoot);
   server.on("/set", handleSet);
-  
-  // Android/iOSの接続チェック(generate_204など)をすべてキャッチする
   server.onNotFound(handleNotFound);
-  
   server.begin();
 
+  Serial.begin(115200);
   M5.Display.fillScreen(TFT_GREEN);
   delay(500);
   M5.Display.fillScreen(TFT_BLACK);
@@ -158,17 +187,33 @@ void setup() {
 
 void loop() {
   M5.update();
-  dnsServer.processNextRequest(); // DNSリクエストの処理 (必須)
+  dnsServer.processNextRequest();
   server.handleClient();
 
   if (M5.BtnA.wasPressed()) {
     M5.Display.fillScreen(TFT_WHITE);
     switch (currentMode) {
-      case 0: if (textBuffer.length() > 0) Keyboard.print(textBuffer); break;
-      case 1: Keyboard.press(KEY_LEFT_CTRL); Keyboard.press('c'); delay(50); Keyboard.releaseAll(); break;
-      case 2: Keyboard.press(KEY_LEFT_CTRL); Keyboard.press('v'); delay(50); Keyboard.releaseAll(); break;
-      case 3: Keyboard.press(KEY_LEFT_GUI); Keyboard.press('l'); delay(50); Keyboard.releaseAll(); break;
-      case 4: Keyboard.write(KEY_RETURN); break;
+      case 0: // Text Input
+        if (textBuffer.length() > 0) Keyboard.print(textBuffer); 
+        break;
+      case 1: // Copy
+        Keyboard.press(KEY_LEFT_CTRL); Keyboard.press('c'); delay(50); Keyboard.releaseAll(); 
+        break;
+      case 2: // Paste
+        Keyboard.press(KEY_LEFT_CTRL); Keyboard.press('v'); delay(50); Keyboard.releaseAll(); 
+        break;
+      case 3: // Lock
+        Keyboard.press(KEY_LEFT_GUI); Keyboard.press('l'); delay(50); Keyboard.releaseAll(); 
+        break;
+      case 4: // Enter
+        Keyboard.write(KEY_RETURN); 
+        break;
+      case 5: // Tab (新規追加)
+        Keyboard.write(KEY_TAB); 
+        break;
+      case 6: // Space (新規追加)
+        Keyboard.write(' '); 
+        break;
     }
     delay(100);
     M5.Display.fillScreen(TFT_BLACK);
